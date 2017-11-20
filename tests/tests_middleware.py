@@ -1,17 +1,13 @@
 # -*- coding: utf8 -*-
 import unittest
-import base58
-import json
-
-from werkzeug.wrappers import Response
-from werkzeug.http import parse_cookie
+import sys
 
 from zappa.wsgi import create_wsgi_request
-from zappa.middleware import ZappaWSGIMiddleware
+from zappa.middleware import ZappaWSGIMiddleware, all_casings
 
 
 class TestWSGIMockMiddleWare(unittest.TestCase):
-    """ 
+    """
     These tests can cheat and have access to the inner status and headers,
     through _start_response.
     """
@@ -26,197 +22,29 @@ class TestWSGIMockMiddleWare(unittest.TestCase):
         self.status[:] = [status]
         self.headers[:] = headers
 
-    def test_wsgi_middleware_multiplecookies(self):
-        def simple_app(environ, start_response):
-            status = '200 OK'
-            response_headers = [('Set-Cookie', 'foo=123'),
-                                ('Set-Cookie', 'bar=456')]
-            start_response(status, response_headers)
-            return ['Hello zappa!']
+    def test_all_casings(self):
 
-        # Wrap the app with the middleware
-        app = ZappaWSGIMiddleware(simple_app)
+        # 2^9
+        input_string = "Set-Cookie"
+        x = 0
+        for casing in all_casings(input_string):
+            x = x + 1
+        self.assertEqual(x, 512)
 
-        # Call with empty WSGI Environment
-        resp = app(dict(), self._start_response)
-
-        self.assertEqual(self.status[0], '200 OK')
-
-        # Assert there is only one zappa cookie
-        self.assertEqual(len(self.headers), 1)
-        self.assertEqual(self.headers[0][0], 'Set-Cookie')
-        self.assertTrue(self.headers[0][1].startswith('zappa='))
-
-        self.assertEqual(''.join(resp), 'Hello zappa!')
-
-    def test_wsgi_middleware_unpackcookies(self):
-        # Setting the cookies
-        def simple_app(environ, start_response):
-            status = '200 OK'
-            response_headers = [('Set-Cookie', 'foo=123'),
-                                ('Set-Cookie', 'bar=456'),
-                                ('Set-Cookie', 'baz=789')]
-            start_response(status, response_headers)
-            return ['Set cookies!']
-
-        # Wrap the app with the middleware
-        app = ZappaWSGIMiddleware(simple_app)
-
-        # Call with empty WSGI Environment
-        resp = app(dict(), self._start_response)
-
-        # Ensure the encoded zappa cookie is set
-        self.assertEqual(self.headers[0][0], 'Set-Cookie')
-        zappa_cookie = self.headers[0][1]
-        self.assertTrue(zappa_cookie.startswith('zappa='))
-
-        # Reads the hopefully decoded cookies
-        def simple_app(environ, start_response):
-            status = '200 OK'
-            response_headers = []
-            start_response(status, response_headers)
-            return [environ['HTTP_COOKIE']]
-
-        # Wrap the app with the middleware
-        app = ZappaWSGIMiddleware(simple_app)
-
-        # Call the app with the encoded cookie in the environment
-        resp = app({'HTTP_COOKIE': zappa_cookie}, self._start_response)
-
-        # Assert that the simple_app, received the decoded cookies
-        excpected = {'foo': '123', 'bar': '456', 'baz': '789'}
-        received = parse_cookie(''.join(resp))
-        self.assertDictEqual(received, excpected)
-
-    def test_wsgi_middleware_cookieoverwrite(self):
-        """ This method do:
-            * Sets a bunch of cookies.
-            * Fetches the zappa cookie from the response
-            * Overwrites only some of the cookies.
-            * Fetches the zappa cookie from the response
-            * Reads the cookie
-        """
-        # Setting the cookies
-        def set_cookies(environ, start_response):
-            status = '200 OK'
-            response_headers = [('Set-Cookie', 'foo=123'),
-                                ('Set-Cookie', 'bar=456'),
-                                ('Set-Cookie', 'baz=789; Expires=Wed, 09-Jun-2001 10:18:14 GMT;')]
-            start_response(status, response_headers)
-            return ['Set cookies!']
-
-        # Wrap the app with the middleware
-        app = ZappaWSGIMiddleware(set_cookies)
-
-        # Call with empty WSGI Environment
-        resp = app(dict(), self._start_response)
-
-        # Retrieve the cookie
-        zappa_cookie = self.headers[0][1]
-
-        def change_cookies(environ, start_response):
-            status = '200 OK'
-            response_headers = [('Set-Cookie', 'foo=sdf'),
-                                ('Set-Cookie', 'baz=jkl')]
-            start_response(status, response_headers)
-            return ['Set cookies!']
-
-        # Wrap the app with the middleware
-        app = ZappaWSGIMiddleware(change_cookies)
-
-        # Call the app with the encoded cookie in the environment
-        resp = app({'HTTP_COOKIE': zappa_cookie}, self._start_response)
-
-        # Retrieve the cookie
-        zappa_cookie = self.headers[0][1]
-
-        # Reads the hopefully decoded cookies
-        def read_cookies(environ, start_response):
-            status = '200 OK'
-            response_headers = []
-            start_response(status, response_headers)
-            return [environ['HTTP_COOKIE']]
-
-        # Wrap the app with the middleware
-        app = ZappaWSGIMiddleware(read_cookies)
-
-        # Call the app with the encoded cookie in the environment
-        resp = app({'HTTP_COOKIE': zappa_cookie}, self._start_response)
-
-        # Assert that read_cookies received the corrected decoded cookies
-        excpected = {'foo': 'sdf', 'bar': '456', 'baz': 'jkl'}
-        received = parse_cookie(''.join(resp))
-
-        self.assertDictEqual(received, excpected)
-
-        # Call the app with the encoded cookie in the environment
-        resp = app({'HTTP_COOKIE': zappa_cookie}, self._start_response)
-        received = parse_cookie(''.join(resp))
-        self.assertDictEqual(received, excpected)
-
-    def test_wsgi_middleware_redirect(self):
-        url = 'http://bogus.com/target'
-        body = 'Moved. Click <a href="' + url + '">here</a>!'
-
-        # 301
-        def simple_app(environ, start_response):
-            status = '301 Moved Permanently'
-            response_headers = [('Location', url),
-                                ('Set-Cookie', 'foo=456')]
-            start_response(status, response_headers)
-            return [body]
-
-        # Wrap the app with the middleware
-        app = ZappaWSGIMiddleware(simple_app)
-
-        # Call with empty WSGI Environment
-        resp = app(dict(), self._start_response)
-
-        #self.assertEqual(self.status[0], '301 Moved Permanently')
-        self.assertEqual(self.status[0], '200 OK')
-
-        # Assert there is only one zappa cookie
-        self.assertEqual(len(self.headers), 2)
-
-        self.assertEqual(self.headers[0][0], 'Location')
-        self.assertEqual(self.headers[0][1], url)
-
-        self.assertEqual(self.headers[1][0], 'Set-Cookie')
-        self.assertTrue(self.headers[1][1].startswith('zappa='))
-
-        self.assertNotEqual(''.join(resp), body)
-
-        # Same as above but with 302f
-        def simple_app(environ, start_response):
-            status = '302 Found'
-            response_headers = [('Derp', 'Max-Squirt'),
-                                ('Location', url),
-                                ('Set-Cookie', 'foo=456')]
-            start_response(status, response_headers)
-            return [body]
-
-        # Wrap the app with the middleware
-        app = ZappaWSGIMiddleware(simple_app)
-
-        # Call with empty WSGI Environment
-        resp = app(dict(), self._start_response)
-
-        #self.assertEqual(self.status[0], '302 Found')
-        self.assertEqual(self.status[0], '200 OK')
-        self.assertEqual(len(self.headers), 3)
-
-        self.assertEqual(self.headers[1][0], 'Location')
-        self.assertEqual(self.headers[1][1], url)
-
-        self.assertEqual(self.headers[2][0], 'Set-Cookie')
-        self.assertTrue(self.headers[2][1].startswith('zappa='))
-
-        self.assertNotEqual(''.join(resp), body)
+        # 2^0
+        input_string = ""
+        x = 0
+        for casing in all_casings(input_string):
+            x = x + 1
+        self.assertEqual(x, 1)
 
     def test_wsgi_middleware_uglystring(self):
-        ugly_string = unicode("˝ÓÔÒÚÆ☃ЗИЙКЛМФХЦЧШ차를 타고 온 펲시맨(╯°□°）╯︵ ┻━┻)"
-                              "לֹהִים, אֵת הַשָּׁמַיִם, וְאֵת הָt͔̦h̞̲e̢̤ ͍̬̲͖f̴̘͕̣è͖ẹ̥̩l͖͔͚i͓͚̦͠n͖͍̗͓̳̮g͍ ̨ 𝕢𝕦𝕚𝕔𝕜 𝕓𝕣𝕠𝕨",
-                              encoding='utf8')
+        if sys.version_info[0] < 3:
+            ugly_string = unicode("˝ÓÔÒÚÆ☃ЗИЙКЛМФХЦЧШ차를 타고 온 펲시맨(╯°□°）╯︵ ┻━┻)"
+                                  "לֹהִים, אֵת הַשָּׁמַיִם, וְאֵת הָt͔̦h̞̲e̢̤ ͍̬̲͖f̴̘͕̣è͖ẹ̥̩l͖͔͚i͓͚̦͠n͖͍̗͓̳̮g͍ ̨ 𝕢𝕦𝕚𝕔𝕜 𝕓𝕣𝕠𝕨",
+                                  encoding='utf8')
+        else:
+            ugly_string = "˝ÓÔÒÚÆ☃ЗИЙКЛМФХЦЧШ차를 타고 온 펲시맨(╯°□°）╯︵ ┻━┻)"
 
         # Pass some unicode through the middleware body
         def simple_app(environ, start_response):
@@ -248,130 +76,174 @@ class TestWSGIMockMiddleWare(unittest.TestCase):
         resp = app(dict(), self._start_response)
         print(''.join(resp))
 
-    def test_wsgi_middleware_expiry(self):
-        # Setting the cookies
-        def simple_app(environ, start_response):
-            status = '200 OK'
-            response_headers = [('Set-Cookie', 'boss=hogg; Expires=Wed, 09-Jun-2021 10:18:14 GMT;'),
-                                ('Set-Cookie', 'spank=stank; Expires=Wed, 09-Jun-2010 10:18:14 GMT;'),
-                                ('Set-Cookie', 'out=lawz; Expires=Wed, 09-Jun-2001 10:18:14 GMT;')]
-            start_response(status, response_headers)
-            return ['Stale cookies!']
-
-        # Wrap the app with the middleware
-        app = ZappaWSGIMiddleware(simple_app)
-
-        # Call with empty WSGI Environment
-        resp = app(dict(), self._start_response)
-
-        # Ensure the encoded zappa cookie is set
-        self.assertEqual(self.headers[0][0], 'Set-Cookie')
-        zappa_cookie = self.headers[0][1]
-        self.assertTrue(zappa_cookie.startswith('zappa='))
-
-class TestWSGIMiddleWare(unittest.TestCase):
-    """ These tests call the app as it is called in a handler, and can only
-        access the returned status, body, and headers.
-    """
-    def test_wsgi_middleware_realcall(self):
-        print("1: Setting the cookies.")
+    def test_wsgi_authorizer_handling(self):
+        # With user
         event = {
-            u'method': u'POST',
-            u'params': {u'parameter_1': u'set_cookie'},
-            u'body': u'foo=xxx&bar=yyy',
-            u'headers': {},
-            u'query': {}}
-
-        def set_cookies(environ, start_response):
-            status = '200 OK'
-            print environ
-            response_headers = [('Set-Cookie', 'foo=123'),
-                                ('Set-Cookie', 'bar=456'),
-                                ('Set-Cookie', 'baz=789')]
-            start_response(status, response_headers)
-            return ['Set cookies!']
-
-        app = ZappaWSGIMiddleware(set_cookies)
-
-        environ = create_wsgi_request(event, script_name='http://zappa.com/',
-                                      trailing_slash=False)
-
-        response = Response.from_app(app, environ)
-
-        # Filter the headers for Set-Cookie header
-        zappa_cookie = [x[1] for x in response.headers if x[0] == 'Set-Cookie']
-        self.assertEqual(len(zappa_cookie), 1)
-        zappa_cookie0 = zappa_cookie[0]
-        self.assertTrue(zappa_cookie0.startswith('zappa='))
-
-        print("2: Changing 1 cookie")
-        event = {
-            u'method': u'POST',
-            u'params': {u'parameter_1': u'set_cookie'},
-            u'body': u'foo=qwe',
+            u'httpMethod': u'GET',
+            u'queryStringParameters': None,
+            u'path': u'/v1/runs',
+            u'params': {},
+            u'body': {},
             u'headers': {
-                u'Cookie': zappa_cookie0
+                u'Content-Type': u'application/json'
+            },
+            u'pathParameters': {
+                u'proxy': 'v1/runs'
+            },
+            u'requestContext': {
+                u'authorizer': {
+                    u'principalId': u'user1'
+                }
             },
             u'query': {}
         }
 
         environ = create_wsgi_request(event, script_name='http://zappa.com/',
                                       trailing_slash=False)
+        self.assertEqual(environ['REMOTE_USER'], u'user1')
 
-        def change_cookie(environ, start_response):
-            status = '200 OK'
-            print 'environ', environ
-            response_headers = [('Set-Cookie', 'foo=new_value')]
-            start_response(status, response_headers)
-            return ['Set cookies!']
-
-        app = ZappaWSGIMiddleware(change_cookie)
-
-        response = Response.from_app(app, environ)
-
-        # Filter the headers for Set-Cookie header
-        zappa_cookie = [x[1] for x in response.headers if x[0] == 'Set-Cookie']
-        self.assertEqual(len(zappa_cookie), 1)
-        zappa_cookie1 = zappa_cookie[0]
-        self.assertTrue(zappa_cookie1.startswith('zappa='))
-        zdict = parse_cookie(zappa_cookie1)
-        print 'zdict', zdict
-        zdict2 = json.loads(base58.b58decode(zdict['zappa']))
-        print 'zdict2', zdict2
-        self.assertEqual(len(zdict2), 3)
-        self.assertEqual(zdict2['foo'], 'new_value')
-        self.assertEqual(zdict2['bar'], '456')
-        self.assertEqual(zdict2['baz'], '789')
-
-        # We have changed foo, so they should be different
-        self.assertNotEqual(zappa_cookie0, zappa_cookie1)
-
-        print("3: Reading the cookies")
-        event['headers']['Cookie'] = zappa_cookie1
-
-        def read_cookies(environ, start_response):
-            status = '200 OK'
-            print 'environ', environ
-            response_headers = []
-            start_response(status, response_headers)
-            return [environ['HTTP_COOKIE']]
-
-        app = ZappaWSGIMiddleware(read_cookies)
+        # With empty authorizer, should not include REMOTE_USER
+        event = {
+            u'httpMethod': u'GET',
+            u'queryStringParameters': None,
+            u'path': u'/v1/runs',
+            u'params': {},
+            u'body': {},
+            u'headers': {
+                u'Content-Type': u'application/json'
+            },
+            u'pathParameters': {
+                u'proxy': 'v1/runs'
+            },
+            u'requestContext': {
+                u'authorizer': {
+                    u'principalId': u''
+                }
+            },
+            u'query': {}
+        }
 
         environ = create_wsgi_request(event, script_name='http://zappa.com/',
                                       trailing_slash=False)
+        user = environ.get('REMOTE_USER', u'no_user')
+        self.assertEqual(user, u'no_user')
 
-        response = Response.from_app(app, environ)
-        print "response", response
-        # Filter the headers for Set-Cookie header
-        zappa_cookie = [x[1] for x in response.headers if x[0] == 'Set-Cookie']
-        self.assertEqual(len(zappa_cookie), 1)
-        zappa_cookie1 = zappa_cookie[0]
-        self.assertTrue(zappa_cookie1.startswith('zappa='))
-        zdict = parse_cookie(zappa_cookie1)
-        print 'zdict', zdict
-        cookies = json.loads(base58.b58decode(zdict['zappa']))
-        self.assertEqual(cookies['foo'], 'new_value')
-        self.assertEqual(cookies['bar'], '456')
-        self.assertEqual(cookies['baz'], '789')
+        # With missing authorizer, should not include REMOTE_USER
+        event = {
+            u'httpMethod': u'GET',
+            u'queryStringParameters': None,
+            u'path': u'/v1/runs',
+            u'params': {},
+            u'body': {},
+            u'headers': {
+                u'Content-Type': u'application/json'
+            },
+            u'pathParameters': {
+                u'proxy': 'v1/runs'
+            },
+            u'requestContext': {},
+            u'query': {}
+        }
+
+        environ = create_wsgi_request(event, script_name='http://zappa.com/',
+                                      trailing_slash=False)
+        user = environ.get('REMOTE_USER', u'no_user')
+        self.assertEqual(user, u'no_user')
+
+        # With empty authorizer, should not include REMOTE_USER
+        event = {
+            u'httpMethod': u'GET',
+            u'queryStringParameters': None,
+            u'path': u'/v1/runs',
+            u'params': {},
+            u'body': {},
+            u'headers': {
+                u'Content-Type': u'application/json'
+            },
+            u'pathParameters': {
+                u'proxy': 'v1/runs'
+            },
+            u'requestContext': {
+                u'authorizer': {}
+            },
+            u'query': {}
+        }
+
+        environ = create_wsgi_request(event, script_name='http://zappa.com/',
+                                      trailing_slash=False)
+        user = environ.get('REMOTE_USER', u'no_user')
+        self.assertEqual(user, u'no_user')
+
+    def test_wsgi_map_context_headers_handling(self):
+
+        # Validate a single context value mapping is translated into a HTTP header
+        event = {
+            u'httpMethod': u'GET',
+            u'queryStringParameters': None,
+            u'path': u'/v1/runs',
+            u'params': {},
+            u'body': {},
+            u'headers': {
+                u'Content-Type': u'application/json'
+            },
+            u'pathParameters': {
+                u'proxy': 'v1/runs'
+            },
+            u'requestContext': {
+                u'authorizer': {
+                    u'principalId': u'user1'
+                },
+
+            },
+            u'query': {}
+        }
+
+        environ = create_wsgi_request(event, script_name='http://zappa.com/',
+                                      trailing_slash=False,
+                                      context_header_mappings={'PrincipalId': 'authorizer.principalId'})
+        self.assertEqual(environ['HTTP_PRINCIPALID'], u'user1')
+
+        # Validate multiple mappings with an invalid mapping
+        # Invalid mapping should be ignored
+        event = {
+            u'httpMethod': u'GET',
+            u'queryStringParameters': None,
+            u'path': u'/v1/runs',
+            u'params': {},
+            u'body': {},
+            u'headers': {
+                u'Content-Type': u'application/json'
+            },
+            u'pathParameters': {
+                u'proxy': 'v1/runs'
+            },
+            u'requestContext': {
+                u"resourceId": u"123456",
+                u"apiId": u"1234567890",
+                u"resourcePath": u"/{proxy+}",
+                u"httpMethod": u"POST",
+                u"requestId": u"c6af9ac6-7b61-11e6-9a41-93e8deadbeef",
+                u"accountId": u"123456789012",
+                u"identity": {
+                    u"userAgent": u"Custom User Agent String",
+                    u"cognitoIdentityPoolId": u"userpoolID",
+                    u"cognitoIdentityId": u"myCognitoID",
+                    u"sourceIp": u"127.0.0.1",
+                },
+                "stage": "prod"
+            },
+            u'query': {}
+        }
+
+        environ = create_wsgi_request(event, script_name='http://zappa.com/',
+                                      trailing_slash=False,
+                                      context_header_mappings={'CognitoIdentityID': 'identity.cognitoIdentityId',
+                                                               'APIStage': 'stage',
+                                                               'InvalidValue': 'identity.cognitoAuthenticationType',
+                                                               'OtherInvalid': 'nothinghere'})
+        self.assertEqual(environ['HTTP_COGNITOIDENTITYID'], u'myCognitoID')
+        self.assertEqual(environ['HTTP_APISTAGE'], u'prod')
+        self.assertNotIn('HTTP_INVALIDVALUE', environ)
+        self.assertNotIn('HTTP_OTHERINVALID', environ)
+
 

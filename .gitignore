@@ -1,3 +1,6 @@
+*~
+*.zip
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -38,6 +41,7 @@ pip-delete-this-directory.txt
 htmlcov/
 .tox/
 .coverage
+.coveragerc
 .coverage.*
 .cache
 nosetests.xml
@@ -58,9 +62,26 @@ docs/_build/
 # PyBuilder
 target/
 
+# pyenv
+.python-version
+
 # PyCharm
 #  Project settings from the PyCharm IDE are stored in the .idea folder
 .idea/
 
 # Apple OS X specific files are put into the .DS_Store file
 .DS_Store
+
+# Vim stuff:
+*.swp
+*.swo
+*~
+tests/zappa_settings.json
+tests/example_template_outputs
+
+# Locally generated settings file
+zappa_settings.json
+
+# Sublime Text stuff
+*.sublime-project
+*.sublime-workspace
